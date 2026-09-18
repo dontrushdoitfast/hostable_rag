@@ -4,8 +4,8 @@ from app.retrieval.service import RetrievalService, RetrievalRequest, RetrievalR
 from app.ingestion.sync_engine import SyncEngine
 
 router = APIRouter()
-retrieval_service = RetrievalService()
 sync_engine = SyncEngine()
+retrieval_service = RetrievalService(connector=sync_engine.connector)
 
 
 @router.post(

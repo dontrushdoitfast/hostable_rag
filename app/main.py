@@ -20,8 +20,11 @@ start_time = time.time()
 async def lifespan(app: FastAPI):
     logger.info("Starting R2R SharePoint Retrieval Service...")
     sync_engine.start_scheduled_sync()
-    yield
-    logger.info("Shutting down R2R SharePoint Retrieval Service...")
+    try:
+        yield
+    finally:
+        logger.info("Shutting down R2R SharePoint Retrieval Service...")
+        sync_engine.stop_scheduled_sync()
 
 
 app = FastAPI(

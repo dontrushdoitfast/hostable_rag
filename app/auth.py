@@ -1,3 +1,4 @@
+import secrets
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHeader
 from app.config import settings
@@ -19,7 +20,7 @@ async def verify_api_key(
     elif bearer_auth and bearer_auth.credentials:
         token = bearer_auth.credentials
 
-    if not token or token != settings.API_KEY:
+    if not token or not secrets.compare_digest(token, settings.API_KEY):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing authentication credentials",

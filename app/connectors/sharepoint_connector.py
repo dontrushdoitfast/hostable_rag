@@ -28,28 +28,25 @@ class SharePointConnector(BaseConnector):
         self.client_secret = client_secret or settings.SHAREPOINT_CLIENT_SECRET
         self.site_id = site_id or settings.SHAREPOINT_SITE_ID
         self.graph_base_url = "https://graph.microsoft.com/v1.0"
-        self._access_token: Optional[str] = None
+        self._app: Optional[ConfidentialClientApplication] = None
 
     def _get_access_token(self) -> str:
-        if self._access_token:
-            return self._access_token
-
         if not (self.tenant_id and self.client_id and self.client_secret):
             raise ValueError("SharePoint tenant_id, client_id, and client_secret are required for production SharePoint integration.")
 
-        authority = f"https://login.microsoftonline.com/{self.tenant_id}"
-        app = ConfidentialClientApplication(
-            client_id=self.client_id,
-            client_credential=self.client_secret,
-            authority=authority,
-        )
+        if self._app is None:
+            authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+            self._app = ConfidentialClientApplication(
+                client_id=self.client_id,
+                client_credential=self.client_secret,
+                authority=authority,
+            )
 
         scopes = ["https://graph.microsoft.com/.default"]
-        result = app.acquire_token_for_client(scopes=scopes)
+        result = self._app.acquire_token_for_client(scopes=scopes)
 
         if "access_token" in result:
-            self._access_token = result["access_token"]
-            return self._access_token
+            return result["access_token"]
         else:
             error_desc = result.get("error_description", "Unknown MSAL error")
             raise RuntimeError(f"Failed to acquire Microsoft Graph token: {error_desc}")
@@ -67,19 +64,21 @@ class SharePointConnector(BaseConnector):
             return []
 
         url = f"{self.graph_base_url}/sites/{self.site_id}/drive/root/children"
+        folders = []
         with httpx.Client() as client:
-            resp = client.get(url, headers=self._get_headers())
-            if resp.status_code != 200:
-                logger.error(f"Error fetching SharePoint root children: {resp.status_code} {resp.text}")
-                return []
+            while url:
+                resp = client.get(url, headers=self._get_headers())
+                if resp.status_code != 200:
+                    logger.error(f"Error fetching SharePoint root children: {resp.status_code} {resp.text}")
+                    break
 
-            data = resp.json()
-            folders = []
-            for item in data.get("value", []):
-                if "folder" in item:
-                    kb_id = item["name"].lower().replace(" ", "_")
-                    folders.append(kb_id)
-            return folders
+                data = resp.json()
+                for item in data.get("value", []):
+                    if "folder" in item:
+                        kb_id = item["name"].lower().replace(" ", "_")
+                        folders.append(kb_id)
+                url = data.get("@odata.nextLink")
+        return folders
 
     def fetch_documents(self, knowledge_base_id: Optional[str] = None) -> List[DocumentMetadata]:
         """
@@ -92,19 +91,22 @@ class SharePointConnector(BaseConnector):
         docs: List[DocumentMetadata] = []
 
         with httpx.Client() as client:
-            resp = client.get(url, headers=self._get_headers())
-            if resp.status_code != 200:
-                return docs
+            while url:
+                resp = client.get(url, headers=self._get_headers())
+                if resp.status_code != 200:
+                    break
 
-            items = resp.json().get("value", [])
-            for item in items:
-                if "folder" in item:
-                    folder_name = item["name"]
-                    kb_id = folder_name.lower().replace(" ", "_")
-                    if knowledge_base_id and knowledge_base_id.lower() != kb_id:
-                        continue
-                    folder_id = item["id"]
-                    docs.extend(self._fetch_folder_docs(client, folder_id, folder_name, kb_id))
+                data = resp.json()
+                items = data.get("value", [])
+                for item in items:
+                    if "folder" in item:
+                        folder_name = item["name"]
+                        kb_id = folder_name.lower().replace(" ", "_")
+                        if knowledge_base_id and knowledge_base_id.lower() != kb_id:
+                            continue
+                        folder_id = item["id"]
+                        docs.extend(self._fetch_folder_docs(client, folder_id, folder_name, kb_id))
+                url = data.get("@odata.nextLink")
 
         return docs
 
@@ -164,7 +166,7 @@ class SharePointConnector(BaseConnector):
                     return None
                 content_bytes = content_resp.content
             else:
-                download_resp = client.get(download_url)
+                download_resp = client.get(download_url, follow_redirects=True)
                 if download_resp.status_code != 200:
                     return None
                 content_bytes = download_resp.content

@@ -46,6 +46,13 @@ class SyncEngine:
             self._bg_task = asyncio.create_task(self._scheduled_sync_loop())
             logger.info(f"Scheduled sync loop started (interval={settings.SYNC_INTERVAL_SECONDS}s).")
 
+    def stop_scheduled_sync(self):
+        """Cancels background periodic sync task."""
+        if self._bg_task and not self._bg_task.done():
+            self._bg_task.cancel()
+            self._bg_task = None
+            logger.info("Scheduled sync loop stopped.")
+
     async def _scheduled_sync_loop(self):
         while True:
             try:

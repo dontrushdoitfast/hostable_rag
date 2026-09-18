@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from app.config import settings
 from app.connectors.base import BaseConnector
 from app.connectors.dummy_connector import DummySharePointConnector
+from app.connectors.sharepoint_connector import SharePointConnector
 from app.ingestion.processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ class RetrievalRequest(BaseModel):
 
     knowledge_base_id: str = Field(..., alias="knowledgeBaseId")
     query: str
-    max_results: Optional[int] = Field(settings.DEFAULT_MAX_RESULTS, alias="maxResults")
+    max_results: Optional[int] = Field(settings.DEFAULT_MAX_RESULTS, alias="maxResults", ge=1, le=100)
 
 
 class RetrievalResponse(BaseModel):
@@ -48,11 +49,16 @@ class RetrievalService:
     def __init__(self, connector: Optional[BaseConnector] = None):
         self.r2r_base_url = settings.R2R_BASE_URL.rstrip("/")
         self.r2r_api_key = settings.R2R_API_KEY
-        self.connector = connector
+        if connector:
+            self.connector = connector
+        elif settings.CONNECTOR_MODE.lower() == "sharepoint":
+            self.connector = SharePointConnector()
+        else:
+            self.connector = DummySharePointConnector()
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResponse:
         kb_id = request.knowledge_base_id.lower().replace(" ", "_")
-        limit = min(request.max_results or settings.DEFAULT_MAX_RESULTS, settings.MAX_ALLOWED_RESULTS)
+        limit = max(1, min(request.max_results or settings.DEFAULT_MAX_RESULTS, settings.MAX_ALLOWED_RESULTS))
 
         # 1. Try R2R Vector/Hybrid search API if R2R server is running
         try:
@@ -126,7 +132,7 @@ class RetrievalService:
         Local fallback engine scanning documents in the target knowledgeBaseId.
         Strictly filters documents to ensure no cross-knowledge-base leaks occur.
         """
-        connector = self.connector or DummySharePointConnector()
+        connector = self.connector
         all_docs = connector.fetch_documents(knowledge_base_id=kb_id)
 
         query_terms = set(query.lower().split())
